@@ -11,6 +11,14 @@ rootProject.layout.buildDirectory.value(newBuildDir)
 subprojects {
     val newSubprojectBuildDir: Directory = newBuildDir.dir(project.name)
     project.layout.buildDirectory.value(newSubprojectBuildDir)
+
+    // --- ADD THIS BLOCK START ---
+    project.configurations.all {
+        resolutionStrategy {
+            force("androidx.activity:activity:1.9.3")
+        }
+    }
+    // --- ADD THIS BLOCK END ---
 }
 
 // Avoid forcing evaluation of the :app project here because it triggers

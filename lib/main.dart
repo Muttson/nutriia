@@ -1,6 +1,10 @@
+import 'dart:convert';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:fl_chart/fl_chart.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:http/http.dart' as http;
 
 // ---------------------------------------------------------------------------
 // 1. MODELOS (Data Layer)
@@ -29,80 +33,92 @@ class FoodGroup {
 }
 
 // ---------------------------------------------------------------------------
-// 2. LOGICA DE ESTADO (Cubit)
+// 2. LÓGICA DE ESTADO (Cubit)
 // ---------------------------------------------------------------------------
 
-// El Estado que define cómo se ve la pantalla
 class NutritionState {
   final double caloriesConsumed;
   final int mealsConsumed;
   final int totalMeals;
   final List<FoodGroup> groups;
+  final bool isLoading; // Para mostrar carga mientras sube la foto
 
-  // Datos para el gráfico (simulados)
-  final double proteinPerc;
-  final double carbPerc;
-  final double vegPerc;
+  // Datos acumulados para calcular porcentajes reales
+  final double totalProteinGrams;
+  final double totalCarbGrams;
+  final double
+  totalFatGrams; // Usaremos grasa para el slot de "Veg/Fat" o "Verduras"
+
+  // Getters para los porcentajes del gráfico
+  double get proteinPerc {
+    double total = totalProteinGrams + totalCarbGrams + totalFatGrams;
+    if (total == 0) return 33; // Valor por defecto si es 0
+    return (totalProteinGrams / total) * 100;
+  }
+
+  double get carbPerc {
+    double total = totalProteinGrams + totalCarbGrams + totalFatGrams;
+    if (total == 0) return 33;
+    return (totalCarbGrams / total) * 100;
+  }
+
+  double get vegPerc {
+    double total = totalProteinGrams + totalCarbGrams + totalFatGrams;
+    if (total == 0) return 34;
+    return (totalFatGrams / total) * 100;
+  }
 
   NutritionState({
     this.caloriesConsumed = 1601,
     this.mealsConsumed = 3,
     this.totalMeals = 5,
     required this.groups,
-    this.proteinPerc = 30,
-    this.carbPerc = 45,
-    this.vegPerc = 25,
+    this.isLoading = false,
+    // Valores iniciales simulados para que el gráfico no empiece vacío
+    this.totalProteinGrams = 30,
+    this.totalCarbGrams = 45,
+    this.totalFatGrams = 25,
   });
 
-  // Helper para copiar el estado con cambios
-  NutritionState copyWith({List<FoodGroup>? groups}) {
+  NutritionState copyWith({
+    List<FoodGroup>? groups,
+    double? caloriesConsumed,
+    int? mealsConsumed,
+    bool? isLoading,
+    double? totalProteinGrams,
+    double? totalCarbGrams,
+    double? totalFatGrams,
+  }) {
     return NutritionState(
-      caloriesConsumed: caloriesConsumed,
-      mealsConsumed: mealsConsumed,
+      caloriesConsumed: caloriesConsumed ?? this.caloriesConsumed,
+      mealsConsumed: mealsConsumed ?? this.mealsConsumed,
       totalMeals: totalMeals,
       groups: groups ?? this.groups,
-      proteinPerc: proteinPerc,
-      carbPerc: carbPerc,
-      vegPerc: vegPerc,
+      isLoading: isLoading ?? this.isLoading,
+      totalProteinGrams: totalProteinGrams ?? this.totalProteinGrams,
+      totalCarbGrams: totalCarbGrams ?? this.totalCarbGrams,
+      totalFatGrams: totalFatGrams ?? this.totalFatGrams,
     );
   }
 }
 
 class NutritionCubit extends Cubit<NutritionState> {
+  final ImagePicker _picker = ImagePicker();
+
   NutritionCubit()
     : super(
         NutritionState(
           groups: [
-            FoodGroup(
-              id: '1',
-              name: 'Grupo 1',
-              color: const Color(0xFFBBEFFF),
-            ), // Cyan claro
-            FoodGroup(
-              id: '2',
-              name: 'Grupo 2',
-              color: const Color(0xFF8FE3F9),
-            ), // Cyan medio
-            FoodGroup(
-              id: '3',
-              name: 'Grupo 3',
-              color: const Color(0xFF54C2DE),
-            ), // Azulado
-            FoodGroup(
-              id: '4',
-              name: 'Grupo 4',
-              color: const Color(0xFF94C1FF),
-            ), // Lila azulado
-            FoodGroup(
-              id: '5',
-              name: 'Grupo 5',
-              color: const Color(0xFF6AE2D8),
-            ), // Turquesa
+            FoodGroup(id: '1', name: 'Grupo 1', color: const Color(0xFFBBEFFF)),
+            FoodGroup(id: '2', name: 'Grupo 2', color: const Color(0xFF8FE3F9)),
+            FoodGroup(id: '3', name: 'Grupo 3', color: const Color(0xFF54C2DE)),
+            FoodGroup(id: '4', name: 'Grupo 4', color: const Color(0xFF94C1FF)),
+            FoodGroup(id: '5', name: 'Grupo 5', color: const Color(0xFF6AE2D8)),
           ],
         ),
       );
 
-  // Acción: Cuando el usuario presiona un cuadro
+  // Acción: Checkbox del Bento Grid
   void toggleGroupCheck(String id) {
     final newGroups =
         state.groups.map((group) {
@@ -111,8 +127,78 @@ class NutritionCubit extends Cubit<NutritionState> {
           }
           return group;
         }).toList();
-
     emit(state.copyWith(groups: newGroups));
+  }
+
+  // Acción: Seleccionar Foto, Enviar a API y Actualizar Estado
+  Future<void> pickAndAnalyzeFood() async {
+    try {
+      // 1. Seleccionar imagen de la galería
+      final XFile? image = await _picker.pickImage(source: ImageSource.gallery);
+
+      if (image == null) return; // Usuario canceló
+
+      // 2. Estado de carga
+      emit(state.copyWith(isLoading: true));
+
+      // 3. Preparar Request
+      // NOTA: Si usas Emulador Android, usa 'http://10.0.2.2:8000/analyze-food'
+      // Si es iOS o Web, localhost suele funcionar o usa tu IP local.
+      var request = http.MultipartRequest(
+        'POST',
+        Uri.parse('http://localhost:8000/analyze-food'),
+      );
+
+      request.files.add(await http.MultipartFile.fromPath('file', image.path));
+
+      // 4. Enviar
+      var response = await request.send();
+
+      if (response.statusCode == 200) {
+        var responseData = await response.stream.bytesToString();
+        var data = jsonDecode(responseData);
+
+        // 5. Extraer datos del JSON
+        // Asumimos la estructura: total_nutrition -> { calories, protein, carbs, fat, ... }
+        final nutrition = data['total_nutrition'];
+
+        double addedCals = (nutrition['calories'] as num).toDouble();
+        double addedProtein = (nutrition['protein'] as num).toDouble();
+        double addedCarbs = (nutrition['carbs'] as num).toDouble();
+        double addedFat = (nutrition['fat'] as num).toDouble();
+
+        // 6. Calcular nuevos totales acumulados
+        double newTotalCals = state.caloriesConsumed + addedCals;
+        double newTotalProtein = state.totalProteinGrams + addedProtein;
+        double newTotalCarbs = state.totalCarbGrams + addedCarbs;
+        double newTotalFat = state.totalFatGrams + addedFat;
+
+        int newMealsConsumed = state.mealsConsumed + 1;
+
+        // 7. Emitir nuevo estado
+        emit(
+          state.copyWith(
+            isLoading: false,
+            caloriesConsumed: newTotalCals,
+            mealsConsumed:
+                newMealsConsumed > state.totalMeals
+                    ? state.totalMeals
+                    : newMealsConsumed,
+            totalProteinGrams: newTotalProtein,
+            totalCarbGrams: newTotalCarbs,
+            totalFatGrams: newTotalFat,
+          ),
+        );
+
+        print('Comida detectada: ${data['foods_detected']}');
+      } else {
+        print('Error API: ${response.statusCode}');
+        emit(state.copyWith(isLoading: false));
+      }
+    } catch (e) {
+      print('Error general: $e');
+      emit(state.copyWith(isLoading: false));
+    }
   }
 }
 
@@ -132,7 +218,7 @@ class MyApp extends StatelessWidget {
     return MaterialApp(
       debugShowCheckedModeBanner: false,
       theme: ThemeData.dark().copyWith(
-        scaffoldBackgroundColor: const Color(0xFF1A1F21), // Fondo oscuro
+        scaffoldBackgroundColor: const Color(0xFF1A1F21),
         primaryColor: Colors.tealAccent,
       ),
       home: BlocProvider(
@@ -148,54 +234,108 @@ class NutritionHomeScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      body: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.all(16.0),
-          child: Column(
-            children: [
-              // Sección Superior: Gráfico y Stats
-              const Expanded(flex: 4, child: TopDashboardSection()),
+    // Escuchamos isLoading para mostrar un overlay si es necesario
+    return BlocListener<NutritionCubit, NutritionState>(
+      listenWhen:
+          (previous, current) => previous.isLoading != current.isLoading,
+      listener: (context, state) {
+        if (state.isLoading) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Analizando alimentos...')),
+          );
+        }
+      },
+      child: Scaffold(
+        body: SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.all(16.0),
+            child: Column(
+              children: [
+                // Sección Superior: Gráfico y Stats
+                const Expanded(flex: 4, child: TopDashboardSection()),
 
-              const SizedBox(height: 20),
+                const SizedBox(height: 20),
 
-              // Sección Media: Bento Grid (Botones)
-              const Expanded(flex: 5, child: BentoGridSection()),
-            ],
+                // Sección Media: Bento Grid (Botones)
+                const Expanded(flex: 5, child: BentoGridSection()),
+              ],
+            ),
           ),
         ),
+        // Barra de navegación inferior con lógica de Tap
+        bottomNavigationBar: const CustomBottomNavBar(),
       ),
-      // Barra de navegación inferior (Visual)
-      bottomNavigationBar: BottomNavigationBar(
-        backgroundColor: const Color(0xFF1A1F21),
-        selectedItemColor: Colors.white,
-        unselectedItemColor: Colors.grey,
-        showSelectedLabels: false,
-        showUnselectedLabels: false,
-        type: BottomNavigationBarType.fixed,
-        items: const [
-          BottomNavigationBarItem(
-            icon: Icon(Icons.home_outlined, size: 30),
-            label: '',
-          ),
-          BottomNavigationBarItem(
-            icon: Icon(Icons.search, size: 30),
-            label: '',
-          ),
-          BottomNavigationBarItem(
-            icon: CircleAvatar(
-              backgroundColor: Color(0xFF6AE2D8),
-              child: Icon(Icons.camera_alt_outlined, color: Colors.black),
+    );
+  }
+}
+
+class CustomBottomNavBar extends StatelessWidget {
+  const CustomBottomNavBar({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final cubit = context.read<NutritionCubit>();
+
+    return BlocBuilder<NutritionCubit, NutritionState>(
+      builder: (context, state) {
+        return BottomNavigationBar(
+          backgroundColor: const Color(0xFF1A1F21),
+          selectedItemColor: Colors.white,
+          unselectedItemColor: Colors.grey,
+          showSelectedLabels: false,
+          showUnselectedLabels: false,
+          type: BottomNavigationBarType.fixed,
+          currentIndex: 0, // Estático por ahora, o manéjalo con estado
+          onTap: (index) {
+            if (index == 2) {
+              // INDICE 2 es la CÁMARA
+              if (!state.isLoading) {
+                cubit.pickAndAnalyzeFood();
+              }
+            } else {
+              // Navegación normal...
+            }
+          },
+          items: [
+            const BottomNavigationBarItem(
+              icon: Icon(Icons.home_outlined, size: 30),
+              label: '',
             ),
-            label: '',
-          ),
-          BottomNavigationBarItem(icon: Icon(Icons.list, size: 30), label: ''),
-          BottomNavigationBarItem(
-            icon: Icon(Icons.person_outline, size: 30),
-            label: '',
-          ),
-        ],
-      ),
+            const BottomNavigationBarItem(
+              icon: Icon(Icons.search, size: 30),
+              label: '',
+            ),
+            BottomNavigationBarItem(
+              icon:
+                  state.isLoading
+                      ? const SizedBox(
+                        width: 24,
+                        height: 24,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: Colors.black,
+                        ),
+                      )
+                      : const CircleAvatar(
+                        backgroundColor: Color(0xFF6AE2D8),
+                        child: Icon(
+                          Icons.camera_alt_outlined,
+                          color: Colors.black,
+                        ),
+                      ),
+              label: '',
+            ),
+            const BottomNavigationBarItem(
+              icon: Icon(Icons.list, size: 30),
+              label: '',
+            ),
+            const BottomNavigationBarItem(
+              icon: Icon(Icons.person_outline, size: 30),
+              label: '',
+            ),
+          ],
+        );
+      },
     );
   }
 }
@@ -230,7 +370,9 @@ class TopDashboardSection extends StatelessWidget {
                           radius: 25,
                         ),
                         PieChartSectionData(
-                          color: const Color(0xFF2DD4BF), // Verduras
+                          color: const Color(
+                            0xFF2DD4BF,
+                          ), // Verduras (o Grasa en datos JSON)
                           value: state.vegPerc,
                           title: '',
                           radius: 25,
@@ -244,7 +386,16 @@ class TopDashboardSection extends StatelessWidget {
                       ],
                     ),
                   ),
-                  // Texto o imagen al centro si deseas
+                  // Texto central
+                  Center(
+                    child:
+                        state.isLoading
+                            ? const Text(
+                              "...",
+                              style: TextStyle(color: Colors.white),
+                            )
+                            : const Icon(Icons.bolt, color: Colors.white54),
+                  ),
                 ],
               ),
             ),
@@ -268,7 +419,7 @@ class TopDashboardSection extends StatelessWidget {
                 ),
                 _LegendItem(
                   color: const Color(0xFF2DD4BF),
-                  label: "Verduras",
+                  label: "Grasa/Veg",
                   percent: state.vegPerc,
                 ),
               ],
@@ -338,7 +489,6 @@ class _StatItem extends StatelessWidget {
   }
 }
 
-// Widget auxiliar para los items de la leyenda
 class _LegendItem extends StatelessWidget {
   final Color color;
   final String label;
@@ -362,7 +512,7 @@ class _LegendItem extends StatelessWidget {
         ),
         const SizedBox(width: 6),
         Text(
-          "$label ${percent.toInt()}%",
+          "$label ${percent.toStringAsFixed(0)}%",
           style: const TextStyle(
             color: Colors.white70,
             fontSize: 12,
@@ -375,6 +525,7 @@ class _LegendItem extends StatelessWidget {
 }
 
 // --- WIDGETS SECCION MEDIA (BENTO GRID) ---
+// (Sin cambios mayores en lógica, solo UI)
 
 class BentoGridSection extends StatelessWidget {
   const BentoGridSection({super.key});
@@ -383,7 +534,6 @@ class BentoGridSection extends StatelessWidget {
   Widget build(BuildContext context) {
     return BlocBuilder<NutritionCubit, NutritionState>(
       builder: (context, state) {
-        // Mapeamos los grupos por ID para facilitar el acceso en el layout
         final g1 = state.groups.firstWhere((g) => g.id == '1');
         final g2 = state.groups.firstWhere((g) => g.id == '2');
         final g3 = state.groups.firstWhere((g) => g.id == '3');
@@ -392,21 +542,16 @@ class BentoGridSection extends StatelessWidget {
 
         return Row(
           children: [
-            // Columna Izquierda (Grupo 1 - Grande Vertical)
             Expanded(flex: 45, child: BentoCard(group: g1)),
             const SizedBox(width: 10),
-            // Columna Derecha
             Expanded(
               flex: 55,
               child: Column(
                 children: [
-                  // Parte superior derecha (Grupo 4)
                   Expanded(flex: 4, child: BentoCard(group: g4)),
                   const SizedBox(height: 10),
-                  // Parte media derecha (Grupo 2)
                   Expanded(flex: 2, child: BentoCard(group: g2)),
                   const SizedBox(height: 10),
-                  // Parte inferior derecha dividida (Grupo 5 y 3)
                   Expanded(
                     flex: 4,
                     child: Row(
@@ -443,12 +588,10 @@ class BentoCard extends StatelessWidget {
         ),
         child: Stack(
           children: [
-            // Contenido centrado (Texto + Imagen placeholder)
             Center(
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  // Aquí irían tus imágenes reales, uso Iconos por ahora
                   Icon(
                     Icons.fastfood_outlined,
                     color: Colors.white.withOpacity(0.7),
@@ -466,8 +609,6 @@ class BentoCard extends StatelessWidget {
                 ],
               ),
             ),
-
-            // Checkmark Overlay (Aparece si está checkeado)
             if (group.isChecked)
               Container(
                 decoration: BoxDecoration(
