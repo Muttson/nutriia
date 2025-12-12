@@ -5,6 +5,7 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:http/http.dart' as http;
+import 'package:http_parser/http_parser.dart';
 
 // ---------------------------------------------------------------------------
 // 1. MODELOS (Data Layer)
@@ -41,18 +42,23 @@ class NutritionState {
   final int mealsConsumed;
   final int totalMeals;
   final List<FoodGroup> groups;
-  final bool isLoading; // Para mostrar carga mientras sube la foto
+  final bool isLoading;
 
-  // Datos acumulados para calcular porcentajes reales
+  // Macros principales (para la gráfica)
   final double totalProteinGrams;
   final double totalCarbGrams;
-  final double
-  totalFatGrams; // Usaremos grasa para el slot de "Veg/Fat" o "Verduras"
+  final double totalFatGrams;
 
-  // Getters para los porcentajes del gráfico
+  // Nuevos datos detallados (para el popup)
+  final double totalFiber;
+  final double totalSugar;
+  final double totalSodium;
+  final double totalCholesterol;
+
+  // Getters para porcentajes (sin cambios)
   double get proteinPerc {
     double total = totalProteinGrams + totalCarbGrams + totalFatGrams;
-    if (total == 0) return 33; // Valor por defecto si es 0
+    if (total == 0) return 33;
     return (totalProteinGrams / total) * 100;
   }
 
@@ -69,15 +75,19 @@ class NutritionState {
   }
 
   NutritionState({
-    this.caloriesConsumed = 1601,
-    this.mealsConsumed = 3,
+    this.caloriesConsumed = 0, // Iniciamos en 0 para ver el efecto real
+    this.mealsConsumed = 0,
     this.totalMeals = 5,
     required this.groups,
     this.isLoading = false,
-    // Valores iniciales simulados para que el gráfico no empiece vacío
-    this.totalProteinGrams = 30,
-    this.totalCarbGrams = 45,
-    this.totalFatGrams = 25,
+    this.totalProteinGrams = 0,
+    this.totalCarbGrams = 0,
+    this.totalFatGrams = 0,
+    // Inicializar nuevos campos
+    this.totalFiber = 0,
+    this.totalSugar = 0,
+    this.totalSodium = 0,
+    this.totalCholesterol = 0,
   });
 
   NutritionState copyWith({
@@ -88,6 +98,10 @@ class NutritionState {
     double? totalProteinGrams,
     double? totalCarbGrams,
     double? totalFatGrams,
+    double? totalFiber,
+    double? totalSugar,
+    double? totalSodium,
+    double? totalCholesterol,
   }) {
     return NutritionState(
       caloriesConsumed: caloriesConsumed ?? this.caloriesConsumed,
@@ -98,6 +112,11 @@ class NutritionState {
       totalProteinGrams: totalProteinGrams ?? this.totalProteinGrams,
       totalCarbGrams: totalCarbGrams ?? this.totalCarbGrams,
       totalFatGrams: totalFatGrams ?? this.totalFatGrams,
+      // Copiar nuevos campos
+      totalFiber: totalFiber ?? this.totalFiber,
+      totalSugar: totalSugar ?? this.totalSugar,
+      totalSodium: totalSodium ?? this.totalSodium,
+      totalCholesterol: totalCholesterol ?? this.totalCholesterol,
     );
   }
 }
@@ -109,11 +128,31 @@ class NutritionCubit extends Cubit<NutritionState> {
     : super(
         NutritionState(
           groups: [
-            FoodGroup(id: '1', name: 'Grupo 1', color: const Color(0xFFBBEFFF)),
-            FoodGroup(id: '2', name: 'Grupo 2', color: const Color(0xFF8FE3F9)),
-            FoodGroup(id: '3', name: 'Grupo 3', color: const Color(0xFF54C2DE)),
-            FoodGroup(id: '4', name: 'Grupo 4', color: const Color(0xFF94C1FF)),
-            FoodGroup(id: '5', name: 'Grupo 5', color: const Color(0xFF6AE2D8)),
+            FoodGroup(
+              id: '1',
+              name: 'Comida 1',
+              color: const Color(0xFFBBEFFF),
+            ),
+            FoodGroup(
+              id: '2',
+              name: 'Comida 2',
+              color: const Color(0xFF8FE3F9),
+            ),
+            FoodGroup(
+              id: '3',
+              name: 'Comida 3',
+              color: const Color(0xFF54C2DE),
+            ),
+            FoodGroup(
+              id: '4',
+              name: 'Comida 4',
+              color: const Color(0xFF94C1FF),
+            ),
+            FoodGroup(
+              id: '5',
+              name: 'Comida 5',
+              color: const Color(0xFF6AE2D8),
+            ),
           ],
         ),
       );
@@ -130,67 +169,88 @@ class NutritionCubit extends Cubit<NutritionState> {
     emit(state.copyWith(groups: newGroups));
   }
 
+  void resetAll() {
+    emit(
+      NutritionState(
+        // Reiniciamos los grupos para quitar los "check"
+        groups: [
+          FoodGroup(id: '1', name: 'Comida 1', color: const Color(0xFFBBEFFF)),
+          FoodGroup(id: '2', name: 'Comida 2', color: const Color(0xFF8FE3F9)),
+          FoodGroup(id: '3', name: 'Comida 3', color: const Color(0xFF54C2DE)),
+          FoodGroup(id: '4', name: 'Comida 4', color: const Color(0xFF94C1FF)),
+          FoodGroup(id: '5', name: 'Comida 5', color: const Color(0xFF6AE2D8)),
+        ],
+        // Todos los valores numéricos volverán a 0 gracias a los valores por defecto del constructor
+        caloriesConsumed: 0,
+        mealsConsumed: 0,
+        totalProteinGrams: 0,
+        totalCarbGrams: 0,
+        totalFatGrams: 0,
+        totalFiber: 0,
+        totalSugar: 0,
+        totalSodium: 0,
+        totalCholesterol: 0,
+      ),
+    );
+  }
+
   // Acción: Seleccionar Foto, Enviar a API y Actualizar Estado
   Future<void> pickAndAnalyzeFood() async {
     try {
-      // 1. Seleccionar imagen de la galería
       final XFile? image = await _picker.pickImage(source: ImageSource.gallery);
+      if (image == null) return;
 
-      if (image == null) return; // Usuario canceló
-
-      // 2. Estado de carga
       emit(state.copyWith(isLoading: true));
 
-      // 3. Preparar Request
-      // NOTA: Si usas Emulador Android, usa 'http://10.0.2.2:8000/analyze-food'
-      // Si es iOS o Web, localhost suele funcionar o usa tu IP local.
+      // AJUSTA TU URL AQUÍ SEGÚN TU ENTORNO:
+      // Emulador Android: 'http://10.0.2.2:8000/analyze-food'
+      // iOS / Web: 'http://127.0.0.1:8000/analyze-food'
       var request = http.MultipartRequest(
         'POST',
-        Uri.parse('http://localhost:8000/analyze-food'),
+        Uri.parse('http://192.168.18.146:8000/analyze-food'),
       );
 
-      request.files.add(await http.MultipartFile.fromPath('file', image.path));
-
-      // 4. Enviar
+      request.files.add(
+        await http.MultipartFile.fromPath(
+          'file',
+          image.path,
+          contentType: MediaType('image', 'jpeg'),
+        ),
+      );
       var response = await request.send();
 
       if (response.statusCode == 200) {
         var responseData = await response.stream.bytesToString();
         var data = jsonDecode(responseData);
-
-        // 5. Extraer datos del JSON
-        // Asumimos la estructura: total_nutrition -> { calories, protein, carbs, fat, ... }
         final nutrition = data['total_nutrition'];
 
+        // Extraer todos los datos
         double addedCals = (nutrition['calories'] as num).toDouble();
         double addedProtein = (nutrition['protein'] as num).toDouble();
         double addedCarbs = (nutrition['carbs'] as num).toDouble();
         double addedFat = (nutrition['fat'] as num).toDouble();
+        double addedFiber = (nutrition['fiber'] as num).toDouble();
+        double addedSugar = (nutrition['sugar'] as num).toDouble();
+        double addedSodium = (nutrition['sodium'] as num).toDouble();
+        double addedCholesterol = (nutrition['cholesterol'] as num).toDouble();
 
-        // 6. Calcular nuevos totales acumulados
-        double newTotalCals = state.caloriesConsumed + addedCals;
-        double newTotalProtein = state.totalProteinGrams + addedProtein;
-        double newTotalCarbs = state.totalCarbGrams + addedCarbs;
-        double newTotalFat = state.totalFatGrams + addedFat;
-
-        int newMealsConsumed = state.mealsConsumed + 1;
-
-        // 7. Emitir nuevo estado
         emit(
           state.copyWith(
             isLoading: false,
-            caloriesConsumed: newTotalCals,
-            mealsConsumed:
-                newMealsConsumed > state.totalMeals
-                    ? state.totalMeals
-                    : newMealsConsumed,
-            totalProteinGrams: newTotalProtein,
-            totalCarbGrams: newTotalCarbs,
-            totalFatGrams: newTotalFat,
+            mealsConsumed: state.mealsConsumed + 1,
+            // Acumulamos los valores a lo que ya teniamos
+            caloriesConsumed: state.caloriesConsumed + addedCals,
+            totalProteinGrams: state.totalProteinGrams + addedProtein,
+            totalCarbGrams: state.totalCarbGrams + addedCarbs,
+            totalFatGrams: state.totalFatGrams + addedFat,
+            totalFiber: state.totalFiber + addedFiber,
+            totalSugar: state.totalSugar + addedSugar,
+            totalSodium: state.totalSodium + addedSodium,
+            totalCholesterol: state.totalCholesterol + addedCholesterol,
           ),
         );
 
-        print('Comida detectada: ${data['foods_detected']}');
+        print('Nutrición actualizada: $nutrition');
       } else {
         print('Error API: ${response.statusCode}');
         emit(state.copyWith(isLoading: false));
@@ -285,26 +345,42 @@ class CustomBottomNavBar extends StatelessWidget {
           showSelectedLabels: false,
           showUnselectedLabels: false,
           type: BottomNavigationBarType.fixed,
-          currentIndex: 0, // Estático por ahora, o manéjalo con estado
+          currentIndex: 0,
           onTap: (index) {
+            // Lógica de botones
             if (index == 2) {
-              // INDICE 2 es la CÁMARA
+              // --- CÁMARA (Centro) ---
               if (!state.isLoading) {
                 cubit.pickAndAnalyzeFood();
               }
-            } else {
-              // Navegación normal...
+            } else if (index == 4) {
+              // --- RESET (Último a la derecha) ---
+              // Llamamos al reset del Cubit
+              cubit.resetAll();
+
+              // Feedback visual (SnackBar)
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text('Todo reiniciado a 0'),
+                  backgroundColor: Colors.teal,
+                  duration: Duration(milliseconds: 800),
+                ),
+              );
             }
           },
           items: [
+            // 0. HOME (Izquierda)
             const BottomNavigationBarItem(
               icon: Icon(Icons.home_outlined, size: 30),
               label: '',
             ),
+            // 1. SEARCH (Izquierda)
             const BottomNavigationBarItem(
               icon: Icon(Icons.search, size: 30),
               label: '',
             ),
+
+            // 2. CÁMARA (Centro - Loading o Icono)
             BottomNavigationBarItem(
               icon:
                   state.isLoading
@@ -325,13 +401,17 @@ class CustomBottomNavBar extends StatelessWidget {
                       ),
               label: '',
             ),
+
+            // 3. LISTA / TRES BARRAS (Derecha - INTACTO)
             const BottomNavigationBarItem(
               icon: Icon(Icons.list, size: 30),
               label: '',
             ),
+
+            // 4. RESET (Derecha extrema - ANTES USUARIO)
             const BottomNavigationBarItem(
-              icon: Icon(Icons.person_outline, size: 30),
-              label: '',
+              icon: Icon(Icons.refresh, size: 30), // Cambiado a Refresh
+              label: 'Reset',
             ),
           ],
         );
@@ -345,6 +425,80 @@ class CustomBottomNavBar extends StatelessWidget {
 class TopDashboardSection extends StatelessWidget {
   const TopDashboardSection({super.key});
 
+  // Función para mostrar el Pop-up
+  void _showDetailsDialog(BuildContext context, NutritionState state) {
+    showDialog(
+      context: context,
+      builder: (ctx) {
+        return AlertDialog(
+          backgroundColor: const Color(0xFF1A1F21),
+          title: const Text(
+            "Información Nutricional",
+            style: TextStyle(color: Colors.tealAccent),
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              _detailRow(
+                "Calorías",
+                "${state.caloriesConsumed.toStringAsFixed(1)} kcal",
+              ),
+              const Divider(color: Colors.grey),
+              _detailRow(
+                "Proteína",
+                "${state.totalProteinGrams.toStringAsFixed(1)} g",
+              ),
+              _detailRow(
+                "Carbohidratos",
+                "${state.totalCarbGrams.toStringAsFixed(1)} g",
+              ),
+              _detailRow(
+                "Grasas",
+                "${state.totalFatGrams.toStringAsFixed(1)} g",
+              ),
+              const Divider(color: Colors.grey),
+              _detailRow("Fibra", "${state.totalFiber.toStringAsFixed(1)} g"),
+              _detailRow("Azúcar", "${state.totalSugar.toStringAsFixed(1)} g"),
+              _detailRow("Sodio", "${state.totalSodium.toStringAsFixed(1)} mg"),
+              _detailRow(
+                "Colesterol",
+                "${state.totalCholesterol.toStringAsFixed(1)} mg",
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: const Text(
+                "Cerrar",
+                style: TextStyle(color: Colors.white),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _detailRow(String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4.0),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Text(label, style: const TextStyle(color: Colors.white70)),
+          Text(
+            value,
+            style: const TextStyle(
+              color: Colors.white,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return BlocBuilder<NutritionCubit, NutritionState>(
@@ -352,56 +506,71 @@ class TopDashboardSection extends StatelessWidget {
         return Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            // Gráfico Circular (fl_chart)
-            SizedBox(
-              height: 200,
-              child: Stack(
-                children: [
-                  PieChart(
-                    PieChartData(
-                      sectionsSpace: 0,
-                      centerSpaceRadius: 60,
-                      startDegreeOffset: 270,
-                      sections: [
-                        PieChartSectionData(
-                          color: const Color(0xFF3B82F6), // Proteina
-                          value: state.proteinPerc,
-                          title: '',
-                          radius: 25,
-                        ),
-                        PieChartSectionData(
-                          color: const Color(
-                            0xFF2DD4BF,
-                          ), // Verduras (o Grasa en datos JSON)
-                          value: state.vegPerc,
-                          title: '',
-                          radius: 25,
-                        ),
-                        PieChartSectionData(
-                          color: const Color(0xFF4097AA), // Carbos
-                          value: state.carbPerc,
-                          title: '',
-                          radius: 25,
-                        ),
-                      ],
+            // Gráfico Circular con Detector de Gestos
+            GestureDetector(
+              onTap: () {
+                // Al presionar la gráfica, mostramos el popup
+                _showDetailsDialog(context, state);
+              },
+              child: SizedBox(
+                height: 200,
+                child: Stack(
+                  children: [
+                    PieChart(
+                      PieChartData(
+                        sectionsSpace: 0,
+                        centerSpaceRadius: 60,
+                        startDegreeOffset: 270,
+                        sections: [
+                          PieChartSectionData(
+                            color: const Color(0xFF3B82F6),
+                            value: state.proteinPerc,
+                            title: '',
+                            radius: 25,
+                          ),
+                          PieChartSectionData(
+                            color: const Color(0xFF2DD4BF),
+                            value: state.vegPerc, // Grasa
+                            title: '',
+                            radius: 25,
+                          ),
+                          PieChartSectionData(
+                            color: const Color(0xFF4097AA),
+                            value: state.carbPerc,
+                            title: '',
+                            radius: 25,
+                          ),
+                        ],
+                      ),
                     ),
-                  ),
-                  // Texto central
-                  Center(
-                    child:
-                        state.isLoading
-                            ? const Text(
-                              "...",
-                              style: TextStyle(color: Colors.white),
-                            )
-                            : const Icon(Icons.bolt, color: Colors.white54),
-                  ),
-                ],
+                    Center(
+                      child:
+                          state.isLoading
+                              ? const CircularProgressIndicator(
+                                color: Colors.white,
+                              )
+                              : const Column(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  Icon(Icons.touch_app, color: Colors.white54),
+                                  Text(
+                                    "Ver detalles",
+                                    style: TextStyle(
+                                      color: Colors.white24,
+                                      fontSize: 10,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                    ),
+                  ],
+                ),
               ),
             ),
+
             const SizedBox(height: 10),
 
-            // --- LEYENDA DE PORCENTAJES ---
+            // Leyenda (Igual que antes)
             Wrap(
               spacing: 16,
               runSpacing: 8,
@@ -419,7 +588,7 @@ class TopDashboardSection extends StatelessWidget {
                 ),
                 _LegendItem(
                   color: const Color(0xFF2DD4BF),
-                  label: "Grasa/Veg",
+                  label: "Grasa",
                   percent: state.vegPerc,
                 ),
               ],
